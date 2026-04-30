@@ -61,8 +61,9 @@ class CsvImportMapping {
     }
   }
 
-  /// Whether the minimum required fields (value + datetime) are mapped.
-  bool get hasMinimumMapping => valueColumn != null && datetimeColumn != null;
+  /// Whether the minimum required fields (value + datetime + category) are mapped.
+  bool get hasMinimumMapping =>
+      valueColumn != null && datetimeColumn != null && categoryColumn != null;
 
   /// Field keys in display order.
   static const List<String> fieldOrder = [

@@ -5,13 +5,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:piggybank/i18n.dart';
 import 'package:piggybank/services/csv_import_service.dart';
-import 'package:piggybank/settings/csv_import/csv_mapping_screen.dart';
+import 'package:piggybank/settings/csv_import/csv_preview_screen.dart';
 
 /// First screen of the CSV import flow.
 ///
 /// Allows the user to provide CSV content by selecting a file from disk or
-/// pasting from the clipboard. Shows a preview of the first few rows before
-/// proceeding to column mapping.
+/// pasting from the clipboard. On success, navigates to [CsvPreviewScreen].
+/// On error, shows a Snackbar.
 class CsvImportPage extends StatefulWidget {
   const CsvImportPage({super.key});
 
@@ -20,19 +20,12 @@ class CsvImportPage extends StatefulWidget {
 }
 
 class _CsvImportPageState extends State<CsvImportPage> {
-  List<String>? _headers;
-  List<Map<String, String>>? _rows;
-  String? _errorMessage;
   bool _isLoading = false;
 
   Future<void> _pickFile() async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
+    setState(() => _isLoading = true);
 
     try {
-      // Clear temp cache on supported platforms
       try {
         await FilePicker.platform.clearTemporaryFiles();
       } catch (_) {}
@@ -44,7 +37,6 @@ class _CsvImportPageState extends State<CsvImportPage> {
           allowedExtensions: ['csv', 'tsv', 'txt'],
         );
       } catch (_) {
-        // Fallback: no extension filter
         result = await FilePicker.platform.pickFiles();
       }
 
@@ -56,34 +48,25 @@ class _CsvImportPageState extends State<CsvImportPage> {
         setState(() => _isLoading = false);
       }
     } catch (e) {
-      setState(() {
-        _isLoading = false;
-        _errorMessage = 'Could not read file: $e';
-      });
+      setState(() => _isLoading = false);
+      _showError('Could not read file: $e');
     }
   }
 
   Future<void> _pasteFromClipboard() async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
+    setState(() => _isLoading = true);
 
     try {
       final data = await Clipboard.getData(Clipboard.kTextPlain);
       if (data == null || data.text == null || data.text!.trim().isEmpty) {
-        setState(() {
-          _isLoading = false;
-          _errorMessage = 'Clipboard is empty or does not contain valid CSV'.i18n;
-        });
+        setState(() => _isLoading = false);
+        _showError('Clipboard is empty or does not contain valid CSV'.i18n);
         return;
       }
       _processContent(data.text!);
     } catch (e) {
-      setState(() {
-        _isLoading = false;
-        _errorMessage = 'Could not read clipboard: $e';
-      });
+      setState(() => _isLoading = false);
+      _showError('Could not read clipboard: $e');
     }
   }
 
@@ -94,50 +77,38 @@ class _CsvImportPageState extends State<CsvImportPage> {
       final rows = parsed.rows;
 
       if (headers.isEmpty) {
-        setState(() {
-          _isLoading = false;
-          _errorMessage = 'Could not parse CSV'.i18n;
-        });
+        setState(() => _isLoading = false);
+        _showError('Could not parse CSV'.i18n);
         return;
       }
 
       if (rows.isEmpty) {
-        setState(() {
-          _isLoading = false;
-          _headers = headers;
-          _rows = rows;
-          _errorMessage = 'CSV file has headers but no data rows.';
-        });
+        setState(() => _isLoading = false);
+        _showError('CSV file has headers but no data rows.');
         return;
       }
 
-      setState(() {
-        _isLoading = false;
-        _headers = headers;
-        _rows = rows;
-        _errorMessage = null;
-      });
+      setState(() => _isLoading = false);
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => CsvPreviewScreen(
+            headers: headers,
+            rows: rows,
+          ),
+        ),
+      );
     } catch (e) {
-      setState(() {
-        _isLoading = false;
-        _errorMessage = 'Could not parse CSV: $e';
-      });
+      setState(() => _isLoading = false);
+      _showError('Could not parse CSV: $e');
     }
   }
 
-  void _continueToMapping() {
-    if (_headers == null || _rows == null) return;
-
-    final mapping = CsvImportService.autoMap(_headers!);
-
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => CsvMappingScreen(
-          headers: _headers!,
-          rows: _rows!,
-          initialMapping: mapping,
-        ),
+  void _showError(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
       ),
     );
   }
@@ -157,7 +128,6 @@ class _CsvImportPageState extends State<CsvImportPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // File picker button
                   _buildActionCard(
                     icon: Icons.file_upload,
                     label: 'Select CSV File'.i18n,
@@ -166,8 +136,6 @@ class _CsvImportPageState extends State<CsvImportPage> {
                     color: Colors.indigo.shade600,
                   ),
                   const SizedBox(height: 12),
-
-                  // Divider
                   Row(
                     children: [
                       const Expanded(child: Divider()),
@@ -176,7 +144,8 @@ class _CsvImportPageState extends State<CsvImportPage> {
                         child: Text(
                           'OR',
                           style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                            color: theme.colorScheme.onSurface
+                                .withValues(alpha: 0.5),
                           ),
                         ),
                       ),
@@ -184,8 +153,6 @@ class _CsvImportPageState extends State<CsvImportPage> {
                     ],
                   ),
                   const SizedBox(height: 12),
-
-                  // Clipboard button
                   _buildActionCard(
                     icon: Icons.paste,
                     label: 'Paste from Clipboard'.i18n,
@@ -193,43 +160,6 @@ class _CsvImportPageState extends State<CsvImportPage> {
                     onTap: _pasteFromClipboard,
                     color: Colors.teal.shade600,
                   ),
-                  const SizedBox(height: 24),
-
-                  // Preview area
-                  if (_headers != null && _rows != null) ...[
-                    _buildPreview(theme),
-                    const SizedBox(height: 24),
-                    if (_rows!.isNotEmpty)
-                      FilledButton.icon(
-                        onPressed: _continueToMapping,
-                        icon: const Icon(Icons.arrow_forward),
-                        label: Text('Continue to Mapping'.i18n),
-                      ),
-                  ],
-
-                  // Error message
-                  if (_errorMessage != null)
-                    Container(
-                      margin: const EdgeInsets.only(top: 16),
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: theme.colorScheme.errorContainer,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(Icons.warning, color: theme.colorScheme.error),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              _errorMessage!,
-                              style: TextStyle(
-                                  color: theme.colorScheme.onErrorContainer),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
                 ],
               ),
             ),
@@ -262,90 +192,27 @@ class _CsvImportPageState extends State<CsvImportPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(label, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
+                    Text(label,
+                        style: const TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w500)),
                     const SizedBox(height: 2),
-                    Text(subtitle, style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6))),
+                    Text(subtitle,
+                        style: TextStyle(
+                            fontSize: 13,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurface
+                                .withValues(alpha: 0.6))),
                   ],
                 ),
               ),
-              Icon(Icons.chevron_right, color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3)),
+              Icon(Icons.chevron_right,
+                  color: Theme.of(context)
+                      .colorScheme
+                      .onSurface
+                      .withValues(alpha: 0.3)),
             ],
           ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildPreview(ThemeData theme) {
-    final displayRows = _rows!.take(5).toList();
-    final displayHeaders = _headers!.take(6).toList();
-
-    return Card(
-      elevation: 1,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.table_chart, size: 20, color: theme.colorScheme.primary),
-                const SizedBox(width: 8),
-                Text(
-                  'CSV Preview'.i18n,
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const Spacer(),
-                Text(
-                  '${_rows!.length} rows, ${_headers!.length} columns',
-                  style: theme.textTheme.bodySmall,
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: DataTable(
-                columnSpacing: 16,
-                dataRowMinHeight: 32,
-                dataRowMaxHeight: 40,
-                headingRowHeight: 36,
-                columns: displayHeaders
-                    .map((h) => DataColumn(
-                          label: Text(
-                            h,
-                            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
-                          ),
-                        ))
-                    .toList(),
-                rows: displayRows
-                    .map((row) => DataRow(
-                          cells: displayHeaders
-                              .map((h) => DataCell(
-                                    Text(
-                                      row[h] ?? '',
-                                      style: const TextStyle(fontSize: 12),
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ))
-                              .toList(),
-                        ))
-                    .toList(),
-              ),
-            ),
-            if (_rows!.length > 5)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  '... and ${_rows!.length - 5} more rows',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
-                  ),
-                ),
-              ),
-          ],
         ),
       ),
     );

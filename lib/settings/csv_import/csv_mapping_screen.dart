@@ -1,7 +1,11 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:piggybank/i18n.dart';
 import 'package:piggybank/models/csv_import_mapping.dart';
+import 'package:piggybank/models/record.dart' as models;
 import 'package:piggybank/services/csv_import_service.dart';
 import 'package:piggybank/settings/csv_import/csv_import_summary_screen.dart';
 
@@ -28,20 +32,349 @@ class CsvMappingScreen extends StatefulWidget {
 
 class _CsvMappingScreenState extends State<CsvMappingScreen> {
   late CsvImportMapping _mapping;
-  late CsvImportPreview _preview;
+  CsvImportPreview? _preview;
+  int _sampleIndex = 0;
+  late List<int> _parsableRowIndices;
+
+  /// Cache of pre-parsed money values: columnHeader → parsed result per row.
+  Map<String, List<double?>> _moneyCache = {};
+
+  /// Cache of pre-parsed date values: columnHeader → parsed result per row.
+  Map<String, List<int?>> _dateCache = {};
+  double _progress = 0;
 
   @override
   void initState() {
     super.initState();
     _mapping = widget.initialMapping;
-    _preview = CsvImportService.buildPreview(widget.rows, _mapping);
+    // Parse in small batches, yielding to the event loop between each
+    // batch so the spinner animates smoothly.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      // Pre-allocate cache lists once.
+      _moneyCache = {
+        for (final h in widget.headers)
+          h: List.filled(widget.rows.length, null),
+      };
+      _dateCache = {
+        for (final h in widget.headers)
+          h: List.filled(widget.rows.length, null),
+      };
+      _parseBatches(0);
+    });
+  }
+
+  void _parseBatches(int rowStart) {
+    const batchSize = 80;
+    final headers = widget.headers;
+    final rows = widget.rows;
+    final end = (rowStart + batchSize).clamp(0, rows.length);
+
+    for (int i = rowStart; i < end; i++) {
+      final row = rows[i];
+      for (final h in headers) {
+        _moneyCache[h]![i] = CsvImportService.parseMoney(row[h]);
+        _dateCache[h]![i] = CsvImportService.parseToMs(row[h]);
+      }
+    }
+
+    if (end < rows.length) {
+      setState(() => _progress = end / rows.length);
+      Future.delayed(Duration.zero, () => _parseBatches(end));
+    } else {
+      _parsableRowIndices = _computeParsableRowIndices();
+      setState(() => _progress = 1);
+    }
+  }
+
+  List<int> _computeParsableRowIndices() {
+    final moneyCol = _mapping.valueColumn;
+    final dateCol = _mapping.datetimeColumn;
+    if (moneyCol == null || dateCol == null) return [];
+    final moneyValues = _moneyCache[moneyCol];
+    final dateValues = _dateCache[dateCol];
+    if (moneyValues == null || dateValues == null) return [];
+    final indices = <int>[];
+    for (int i = 0; i < widget.rows.length; i++) {
+      if (moneyValues[i] != null && dateValues[i] != null) {
+        indices.add(i);
+      }
+    }
+    return indices;
+  }
+
+  Map<String, String>? _sampleCsvRowForIndex(int index) {
+    if (_parsableRowIndices.isEmpty) return null;
+    final rowIdx =
+        _parsableRowIndices[index.clamp(0, _parsableRowIndices.length - 1)];
+    return Map.from(widget.rows[rowIdx]);
+  }
+
+  models.Record? _sampleRecordForIndex(int index) {
+    if (_parsableRowIndices.isEmpty) return null;
+    final rowIdx =
+        _parsableRowIndices[index.clamp(0, _parsableRowIndices.length - 1)];
+    return CsvImportService.rowToRecord(widget.rows[rowIdx], _mapping);
+  }
+
+  void _nextSample() {
+    if (_parsableRowIndices.length <= 1) return;
+    setState(() {
+      _sampleIndex = (_sampleIndex + 1) % _parsableRowIndices.length;
+    });
   }
 
   void _onMappingChanged(String field, String? column) {
     setState(() {
       _mapping.setColumn(field, column);
-      _preview = CsvImportService.buildPreview(widget.rows, _mapping);
+      _parsableRowIndices = _computeParsableRowIndices();
+      _sampleIndex = 0;
+      _preview = null; // invalidate — will be recomputed on Continue
     });
+  }
+
+  /// Builds a preview from the cached pre-parsed values (no re-parsing).
+  CsvImportPreview _buildPreviewFromCache() {
+    final moneyCol = _mapping.valueColumn;
+    final dateCol = _mapping.datetimeColumn;
+    final catCol = _mapping.categoryColumn;
+    final tagCol = _mapping.tagsColumn;
+    final walletCol = _mapping.walletColumn;
+
+    int parsable = 0;
+    int unparseable = 0;
+    final categories = <String>{};
+    final tags = <String>{};
+    final wallets = <String>{};
+    int? earliestMs;
+    int? latestMs;
+
+    for (int i = 0; i < widget.rows.length; i++) {
+      final row = widget.rows[i];
+      final moneyValues = moneyCol != null ? _moneyCache[moneyCol] : null;
+      final dateValues = dateCol != null ? _dateCache[dateCol] : null;
+      final value = moneyValues != null ? moneyValues[i] : null;
+      final dateMs = dateValues != null ? dateValues[i] : null;
+
+      if (value != null && dateMs != null) {
+        parsable++;
+
+        final cat =
+            catCol != null ? (row[catCol] ?? 'Uncategorized') : 'Uncategorized';
+        categories.add(cat);
+
+        if (earliestMs == null || dateMs < earliestMs) earliestMs = dateMs;
+        if (latestMs == null || dateMs > latestMs) latestMs = dateMs;
+
+        if (tagCol != null) {
+          final raw = row[tagCol];
+          if (raw != null && raw.isNotEmpty) {
+            for (final t in raw.split(RegExp(r'[;,]'))) {
+              final trimmed = t.trim();
+              if (trimmed.isNotEmpty) tags.add(trimmed);
+            }
+          }
+        }
+
+        if (walletCol != null) {
+          final w = row[walletCol];
+          if (w != null && w.trim().isNotEmpty) {
+            wallets.add(w.trim());
+          }
+        }
+      } else {
+        unparseable++;
+      }
+    }
+
+    final warnings = <String>[];
+    if (!_mapping.hasMinimumMapping) {
+      warnings.add(
+          'Amount and Date/Time columns must be mapped for records to be imported.');
+    }
+    if (unparseable > 0) {
+      warnings
+          .add('$unparseable row(s) could not be parsed and will be skipped.');
+    }
+    if (parsable == 0) {
+      warnings.add('No records can be imported with the current mapping.');
+    }
+
+    return CsvImportPreview(
+      totalParsableRows: parsable,
+      unparseableRows: unparseable,
+      uniqueCategories: categories.toList()..sort(),
+      uniqueTags: tags.toList()..sort(),
+      uniqueWallets: wallets.toList()..sort(),
+      earliestDate: earliestMs != null
+          ? DateTime.fromMillisecondsSinceEpoch(earliestMs, isUtc: true)
+          : null,
+      latestDate: latestMs != null
+          ? DateTime.fromMillisecondsSinceEpoch(latestMs, isUtc: true)
+          : null,
+      warnings: warnings,
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Saved mappings (SharedPreferences)
+  // -------------------------------------------------------------------------
+
+  static const _savedMappingsKey = 'csv_import_saved_mappings';
+
+  Future<Map<String, String>> _loadSavedMappings() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_savedMappingsKey);
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      return decoded.map((k, v) => MapEntry(k, v as String));
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> _saveMapping(String name) async {
+    final prefs = await SharedPreferences.getInstance();
+    final mappings = await _loadSavedMappings();
+    mappings[name] = jsonEncode(_mapping.toJson());
+    await prefs.setString(_savedMappingsKey, jsonEncode(mappings));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Mapping "$name" saved.'.i18n),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  Future<void> _deleteMapping(String name) async {
+    final prefs = await SharedPreferences.getInstance();
+    final mappings = await _loadSavedMappings();
+    mappings.remove(name);
+    await prefs.setString(_savedMappingsKey, jsonEncode(mappings));
+  }
+
+  Future<void> _showSaveMappingDialog() async {
+    final controller = TextEditingController();
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Save Mapping'.i18n),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: InputDecoration(
+            hintText: 'Mapping name'.i18n,
+            border: const OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('Cancel'.i18n),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: Text('Save'.i18n),
+          ),
+        ],
+      ),
+    );
+    if (name != null && name.isNotEmpty) {
+      await _saveMapping(name);
+    }
+  }
+
+  Future<void> _showLoadMappingSheet() async {
+    final mappings = await _loadSavedMappings();
+    if (mappings.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No saved mappings found.'.i18n),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      return;
+    }
+
+    if (!mounted) return;
+
+    final result = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) {
+        final entries = mappings.entries.toList()
+          ..sort((a, b) => a.key.compareTo(b.key));
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Text(
+                  'Load Saved Mapping'.i18n,
+                  style: Theme.of(ctx).textTheme.titleMedium,
+                ),
+              ),
+              const Divider(),
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: entries.length,
+                  itemBuilder: (_, i) {
+                    final entry = entries[i];
+                    return ListTile(
+                      title: Text(entry.key),
+                      trailing: IconButton(
+                        icon: const Icon(Icons.delete_outline,
+                            size: 20, color: Colors.redAccent),
+                        onPressed: () async {
+                          await _deleteMapping(entry.key);
+                          Navigator.pop(ctx, '__deleted__');
+                        },
+                      ),
+                      onTap: () => Navigator.pop(ctx, entry.key),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (result == null || result == '__deleted__') {
+      if (result == '__deleted__' && mounted) {
+        // Refresh the sheet
+        _showLoadMappingSheet();
+      }
+      return;
+    }
+
+    // Load the selected mapping
+    final jsonStr = mappings[result]!;
+    try {
+      final decoded = jsonDecode(jsonStr) as Map<String, dynamic>;
+      final loaded = CsvImportMapping.fromJson(decoded);
+      setState(() {
+        _mapping = loaded;
+        _parsableRowIndices = _computeParsableRowIndices();
+        _sampleIndex = 0;
+        _preview = null;
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to load mapping: $e'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
   }
 
   void _continueToSummary() {
@@ -49,7 +382,7 @@ class _CsvMappingScreenState extends State<CsvMappingScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Please map at least Amount and Date/Time columns to continue.'
+            'Please map the Amount, Category, and Date/Time columns to continue.'
                 .i18n,
           ),
           behavior: SnackBarBehavior.floating,
@@ -58,13 +391,16 @@ class _CsvMappingScreenState extends State<CsvMappingScreen> {
       return;
     }
 
-    Navigator.push(
+    // Compute preview from cache (fast — no re-parsing).
+    _preview = _buildPreviewFromCache();
+
+    Navigator.pushReplacement(
       context,
       MaterialPageRoute(
         builder: (_) => CsvImportSummaryScreen(
           rows: widget.rows,
           mapping: _mapping,
-          preview: _preview,
+          preview: _preview!,
         ),
       ),
     );
@@ -77,42 +413,75 @@ class _CsvMappingScreenState extends State<CsvMappingScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text('Map Columns'.i18n),
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // Info banner
-                  _buildInfoBanner(theme),
-                  const SizedBox(height: 16),
-
-                  // Mapping dropdowns
-                  ...CsvImportMapping.fieldOrder.map(
-                    (field) => _buildMappingRow(field, theme),
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // Minimum mapping warning
-                  if (!_mapping.hasMinimumMapping) _buildMinimumWarning(theme),
-
-                  const Divider(height: 32),
-
-                  // Live preview section
-                  _buildLivePreview(theme),
-                ],
-              ),
-            ),
+        actions: [
+          const SizedBox(width: 4),
+          IconButton(
+            tooltip: 'Save Mapping'.i18n,
+            icon: const Icon(Icons.save_outlined),
+            onPressed: _showSaveMappingDialog,
           ),
-
-          // Bottom bar
-          _buildBottomBar(theme),
+          const SizedBox(width: 2),
+          IconButton(
+            tooltip: 'Load Mapping'.i18n,
+            icon: const Icon(Icons.folder_open_outlined),
+            onPressed: _showLoadMappingSheet,
+          ),
+          const SizedBox(width: 4),
         ],
       ),
+      body: _progress < 1
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(32),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    LinearProgressIndicator(value: _progress),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Parsing CSV data'.i18n,
+                      style: theme.textTheme.bodyLarge,
+                    ),
+                  ],
+                ),
+              ),
+            )
+          : Column(
+              children: [
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        // Info banner
+                        _buildInfoBanner(theme),
+                        const SizedBox(height: 16),
+
+                        // Mapping dropdowns
+                        ...CsvImportMapping.fieldOrder.map(
+                          (field) => _buildMappingRow(field, theme),
+                        ),
+
+                        const SizedBox(height: 16),
+
+                        // Minimum mapping warning
+                        if (!_mapping.hasMinimumMapping)
+                          _buildMinimumWarning(theme),
+
+                        const Divider(height: 32),
+
+                        // Live preview section
+                        _buildLivePreview(theme),
+                      ],
+                    ),
+                  ),
+                ),
+
+                // Bottom bar
+                _buildBottomBar(theme),
+              ],
+            ),
     );
   }
 
@@ -129,7 +498,8 @@ class _CsvMappingScreenState extends State<CsvMappingScreen> {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              'Map each Oinkoin field to the corresponding column in your CSV file. Columns were auto-detected where possible.'.i18n,
+              'Map each Oinkoin field to the corresponding column in your CSV file. Columns were auto-detected where possible.'
+                  .i18n,
               style: theme.textTheme.bodySmall,
             ),
           ),
@@ -228,7 +598,8 @@ class _CsvMappingScreenState extends State<CsvMappingScreen> {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              'Amount and Date/Time columns are required. No records will be imported without them.'.i18n,
+              'Amount, Category, and Date/Time columns are required. No records will be imported without them.'
+                  .i18n,
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onErrorContainer,
               ),
@@ -240,8 +611,8 @@ class _CsvMappingScreenState extends State<CsvMappingScreen> {
   }
 
   Widget _buildLivePreview(ThemeData theme) {
-    final row = _preview.sampleCsvRow;
-    final record = _preview.sampleRecord;
+    final row = _sampleCsvRowForIndex(_sampleIndex);
+    final record = _sampleRecordForIndex(_sampleIndex);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -254,7 +625,6 @@ class _CsvMappingScreenState extends State<CsvMappingScreen> {
           ),
         ),
         const SizedBox(height: 8),
-
         if (row != null) ...[
           // Original CSV row
           Text(
@@ -268,7 +638,6 @@ class _CsvMappingScreenState extends State<CsvMappingScreen> {
           _buildPreviewTable(row, theme, isOinkoin: false),
           const SizedBox(height: 12),
         ],
-
         if (record != null) ...[
           // Interpreted Oinkoin record
           Text(
@@ -279,24 +648,26 @@ class _CsvMappingScreenState extends State<CsvMappingScreen> {
             ),
           ),
           const SizedBox(height: 4),
-          _buildPreviewTable(_recordToMap(record), theme, isOinkoin: true),
+          _buildPreviewTable(_recordToMap(record, csvRow: row), theme,
+              isOinkoin: true),
         ],
-
-        if (_preview.warnings.isNotEmpty) ...[
+        if (_preview != null && _preview!.warnings.isNotEmpty) ...[
           const SizedBox(height: 12),
-          ..._preview.warnings.map(
+          ..._preview!.warnings.map(
             (w) => Padding(
               padding: const EdgeInsets.only(bottom: 4),
               child: Row(
                 children: [
-                  Icon(Icons.warning_amber, size: 14, color: theme.colorScheme.error),
+                  Icon(Icons.warning_amber,
+                      size: 14, color: theme.colorScheme.error),
                   const SizedBox(width: 4),
                   Expanded(
                     child: Text(
                       w,
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.error,
-                        fontSize: (theme.textTheme.bodySmall?.fontSize ?? 12) + 2,
+                        fontSize:
+                            (theme.textTheme.bodySmall?.fontSize ?? 12) + 2,
                       ),
                     ),
                   ),
@@ -365,7 +736,8 @@ class _CsvMappingScreenState extends State<CsvMappingScreen> {
     );
   }
 
-  Map<String, String> _recordToMap(dynamic record) {
+  Map<String, String> _recordToMap(dynamic record,
+      {Map<String, String>? csvRow}) {
     String formatDate(int? ms) {
       if (ms == null) return '—';
       final dt = DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true);
@@ -377,14 +749,36 @@ class _CsvMappingScreenState extends State<CsvMappingScreen> {
       return v.toStringAsFixed(2);
     }
 
+    // Show '—' when a column is not mapped at all; show actual value
+    // (even if empty) when the column is mapped.
+    String _mapped(String field, String? value) =>
+        _mapping.columnFor(field) != null ? (value ?? '') : '—';
+
+    // For wallet, prefer the original CSV value when available (preview mode
+    // has no DB, so walletId is null). Fall back to the resolved ID otherwise.
+    String _walletValue() {
+      final col = _mapping.columnFor('wallet');
+      if (col == null) return '—';
+      if (csvRow != null && csvRow.containsKey(col)) {
+        return csvRow[col]!.isEmpty ? '' : csvRow[col]!;
+      }
+      return record.walletId?.toString() ?? '';
+    }
+
     return {
-      'Title': record.title ?? '',
+      'Title': _mapped('title', record.title),
       'Value': formatMoney(record.value),
       'Date': formatDate(record.utcDateTime?.millisecondsSinceEpoch),
-      'Category': record.category?.name ?? 'Uncategorized',
-      'Description': record.description ?? '—',
-      'Tags': record.tags?.join(', ') ?? '—',
-      'Wallet': 'ID ${record.walletId ?? "—"}',
+      'Category': _mapping.columnFor('category_name') != null
+          ? (record.category?.name ?? '')
+          : '—',
+      'Description': _mapped('description', record.description),
+      'Tags': _mapped(
+          'tags',
+          (record.tags != null && record.tags!.isNotEmpty)
+              ? record.tags!.join(', ')
+              : ''),
+      'Wallet': _walletValue(),
     };
   }
 
@@ -398,12 +792,23 @@ class _CsvMappingScreenState extends State<CsvMappingScreen> {
         ),
       ),
       child: SafeArea(
-        child: FilledButton.icon(
-          onPressed: _mapping.hasMinimumMapping
-              ? _continueToSummary
-              : null,
-          icon: const Icon(Icons.arrow_forward),
-          label: Text('Continue'.i18n),
+        child: Row(
+          children: [
+            OutlinedButton.icon(
+              onPressed: _parsableRowIndices.length > 1 ? _nextSample : null,
+              icon: const Icon(Icons.shuffle, size: 18),
+              label: Text('Next Sample'.i18n),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: FilledButton.icon(
+                onPressed:
+                    _mapping.hasMinimumMapping ? _continueToSummary : null,
+                icon: const Icon(Icons.arrow_forward),
+                label: Text('Continue'.i18n),
+              ),
+            ),
+          ],
         ),
       ),
     );

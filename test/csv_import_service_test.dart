@@ -14,7 +14,8 @@ void main() {
 
   group('CsvImportService.parseCsv', () {
     test('parses comma-delimited CSV', () {
-      const content = 'title,amount,date\nGrocery,-45.50,2024-01-15\nSalary,3000.00,2024-01-20';
+      const content =
+          'title,amount,date\nGrocery,-45.50,2024-01-15\nSalary,3000.00,2024-01-20';
       final parsed = CsvImportService.parseCsv(content);
       final headers = parsed.headers;
       final rows = parsed.rows;
@@ -84,7 +85,8 @@ void main() {
     });
 
     test('handles quoted fields with commas', () {
-      const content = 'title,description\n"Lunch, at cafe","Good food, nice place"';
+      const content =
+          'title,description\n"Lunch, at cafe","Good food, nice place"';
       final parsed = CsvImportService.parseCsv(content);
       final headers = parsed.headers;
       final rows = parsed.rows;
@@ -143,7 +145,8 @@ void main() {
     });
 
     test('matches "categoria" as category', () {
-      final mapping = CsvImportService.autoMap(['categoria', 'importo', 'data']);
+      final mapping =
+          CsvImportService.autoMap(['categoria', 'importo', 'data']);
       expect(mapping.categoryColumn, 'categoria');
     });
 
@@ -394,7 +397,8 @@ void main() {
       final preview = CsvImportService.buildPreview(rows, mapping);
 
       expect(
-        preview.warnings.any((w) => w.contains('1 row') && w.contains('skipped')),
+        preview.warnings
+            .any((w) => w.contains('1 row') && w.contains('skipped')),
         isTrue,
       );
     });
@@ -415,7 +419,7 @@ void main() {
   });
 
   group('CsvImportMapping', () {
-    test('hasMinimumMapping requires value and datetime', () {
+    test('hasMinimumMapping requires value, datetime, and category', () {
       expect(CsvImportMapping().hasMinimumMapping, isFalse);
       expect(
         CsvImportMapping(valueColumn: 'amount').hasMinimumMapping,
@@ -426,7 +430,29 @@ void main() {
         isFalse,
       );
       expect(
+        CsvImportMapping(categoryColumn: 'cat').hasMinimumMapping,
+        isFalse,
+      );
+      expect(
         CsvImportMapping(valueColumn: 'amount', datetimeColumn: 'date')
+            .hasMinimumMapping,
+        isFalse,
+      );
+      expect(
+        CsvImportMapping(valueColumn: 'amount', categoryColumn: 'cat')
+            .hasMinimumMapping,
+        isFalse,
+      );
+      expect(
+        CsvImportMapping(datetimeColumn: 'date', categoryColumn: 'cat')
+            .hasMinimumMapping,
+        isFalse,
+      );
+      expect(
+        CsvImportMapping(
+                valueColumn: 'amount',
+                datetimeColumn: 'date',
+                categoryColumn: 'cat')
             .hasMinimumMapping,
         isTrue,
       );
@@ -475,7 +501,8 @@ void main() {
       final m1 = CsvImportService.autoMap(['wallet', 'amount', 'date']);
       expect(m1.walletColumn, 'wallet');
 
-      final m2 = CsvImportService.autoMap(['Account Name', 'Value', 'Timestamp']);
+      final m2 =
+          CsvImportService.autoMap(['Account Name', 'Value', 'Timestamp']);
       expect(m2.walletColumn, 'Account Name');
     });
 
@@ -512,6 +539,59 @@ void main() {
       );
       final preview = CsvImportService.buildPreview(rows, mapping);
       expect(preview.uniqueWallets, isEmpty);
+    });
+  });
+
+  group('CsvImportService.rowToRecord', () {
+    test('converts a CSV row to a Record', () {
+      final row = {
+        'Title': 'Groceries',
+        'Amount': '-45.50',
+        'Date': '2024-01-15',
+        'Category': 'Food',
+      };
+      final mapping = CsvImportMapping(
+        titleColumn: 'Title',
+        valueColumn: 'Amount',
+        datetimeColumn: 'Date',
+        categoryColumn: 'Category',
+      );
+
+      final record = CsvImportService.rowToRecord(row, mapping);
+
+      expect(record.title, 'Groceries');
+      expect(record.value, -45.50);
+      expect(record.category?.name, 'Food');
+      expect(record.walletId, isNull);
+    });
+
+    test('converts row with walletId', () {
+      final row = {
+        'Title': 'Salary',
+        'Amount': '3000',
+        'Date': '2024-01-20',
+      };
+      final mapping = CsvImportMapping(
+        titleColumn: 'Title',
+        valueColumn: 'Amount',
+        datetimeColumn: 'Date',
+      );
+
+      final record = CsvImportService.rowToRecord(row, mapping, walletId: 42);
+
+      expect(record.title, 'Salary');
+      expect(record.walletId, 42);
+    });
+
+    test('uses defaults for missing values', () {
+      final row = <String, String>{};
+      final mapping = CsvImportMapping();
+
+      final record = CsvImportService.rowToRecord(row, mapping);
+
+      expect(record.title, '');
+      expect(record.value, 0.0);
+      expect(record.category?.name, 'Uncategorized');
     });
   });
 }

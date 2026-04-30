@@ -34,7 +34,8 @@ void main() {
     CsvImportMapping mapping,
   ) async {
     final parsed = CsvImportService.parseCsv(csvContent);
-    return CsvImportService.importRecords(parsed.rows, mapping, database: ServiceConfig.database);
+    return CsvImportService.importRecords(parsed.rows, mapping,
+        database: ServiceConfig.database);
   }
 
   // ---------------------------------------------------------------------------
@@ -65,7 +66,8 @@ void main() {
 
   test('import skips duplicate categories', () async {
     // Pre-create a category with a unique name not present in default setup
-    final existing = Category('UniqueTestCat', categoryType: CategoryType.expense);
+    final existing =
+        Category('UniqueTestCat', categoryType: CategoryType.expense);
     await ServiceConfig.database.addCategory(existing);
 
     const csv = 'title,amount,date,category\n'
@@ -288,7 +290,8 @@ void main() {
     expect(records.first!.value, -45.50);
   });
 
-  test('import uses Uncategorized when category column is not mapped', () async {
+  test('import uses Uncategorized when category column is not mapped',
+      () async {
     const csv = 'title,amount,date\nTest,42,2024-01-15';
 
     final mapping = CsvImportMapping(
@@ -322,10 +325,13 @@ void main() {
 
     final preview = CsvImportService.buildPreview(parsed.rows, mapping);
     expect(preview.totalParsableRows, 3);
-    expect(preview.uniqueCategories, containsAll(['Food', 'Income', 'Transport']));
-    expect(preview.uniqueTags, containsAll(['lunch', 'food', 'work', 'transport']));
+    expect(
+        preview.uniqueCategories, containsAll(['Food', 'Income', 'Transport']));
+    expect(preview.uniqueTags,
+        containsAll(['lunch', 'food', 'work', 'transport']));
 
-    await CsvImportService.importRecords(parsed.rows, mapping, database: ServiceConfig.database);
+    await CsvImportService.importRecords(parsed.rows, mapping,
+        database: ServiceConfig.database);
 
     final records = await ServiceConfig.database.getAllRecords();
     expect(records.length, 3);
@@ -338,7 +344,8 @@ void main() {
     expect(allTags, containsAll(['lunch', 'food', 'work', 'transport']));
   });
 
-  test('import with wallet column creates wallets and assigns records', () async {
+  test('import with wallet column creates wallets and assigns records',
+      () async {
     const csv = 'title,amount,date,wallet\n'
         'Coffee,-5,2024-06-01,Cash\n'
         'Rent,-800,2024-06-01,Bank\n'
@@ -372,7 +379,8 @@ void main() {
     expect(bankRecords.length, 1); // Rent
   });
 
-  test('import without wallet column assigns records to default wallet', () async {
+  test('import without wallet column assigns records to default wallet',
+      () async {
     const csv = 'title,amount,date\nTest,42,2024-06-01';
 
     final mapping = CsvImportMapping(
@@ -409,5 +417,34 @@ void main() {
     final wallets = await ServiceConfig.database.getAllWallets();
     final myBankWallets = wallets.where((w) => w.name == 'MyBank');
     expect(myBankWallets.length, 1);
+  });
+
+  test('import same CSV twice with wallets skips duplicates', () async {
+    const csv = 'title,amount,date,category,wallet\n'
+        'Coffee,-5,2024-06-01,Food,Cash\n'
+        'Rent,-800,2024-06-01,Housing,Bank\n'
+        'Salary,3000,2024-06-05,Income,Bank';
+
+    final mapping = CsvImportMapping(
+      titleColumn: 'title',
+      valueColumn: 'amount',
+      datetimeColumn: 'date',
+      categoryColumn: 'category',
+      walletColumn: 'wallet',
+    );
+
+    // First import
+    await importCsvString(csv, mapping);
+    final records1 = await ServiceConfig.database.getAllRecords();
+    expect(records1.length, 3);
+
+    // Second import — same data, should be skipped
+    await importCsvString(csv, mapping);
+    final records2 = await ServiceConfig.database.getAllRecords();
+    expect(records2.length, 3); // no new records
+
+    final wallets = await ServiceConfig.database.getAllWallets();
+    expect(wallets.where((w) => w.name == 'Cash').length, 1);
+    expect(wallets.where((w) => w.name == 'Bank').length, 1);
   });
 }
