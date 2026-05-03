@@ -524,7 +524,18 @@ class TabRecordsController {
   }
 
   Future<void> _exportToCSV() async {
-    var csvStr = CSVExporter.createCSVFromRecordList(filteredRecords);
+    // Build wallet name lookup: ID → name
+    final allWallets = await _database.getAllWallets(
+        profileId: ProfileService.instance.activeProfileId);
+    final walletNames = <int, String>{};
+    for (final w in allWallets) {
+      walletNames[w.id!] = w.name;
+    }
+
+    var csvStr = CSVExporter.createCSVFromRecordList(
+      filteredRecords,
+      walletNames: walletNames,
+    );
     final path = await getApplicationDocumentsDirectory();
     var csvFile = File(path.path + "/records.csv");
     await csvFile.writeAsString(csvStr);

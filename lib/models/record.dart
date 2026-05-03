@@ -102,7 +102,9 @@ class Record extends Model {
 
   bool get isTransfer => transferWalletId != null;
 
-  Map<String, dynamic> toCsvMap() {
+  Map<String, dynamic> toCsvMap({Map<int, String>? walletNames}) {
+    final walletName =
+        walletId != null ? (walletNames?[walletId] ?? '') : '';
     return {
       'title': title,
       'value': value,
@@ -112,8 +114,7 @@ class Record extends Model {
           category?.categoryType?.index == 1 ? "Income" : "Expense",
       'description': description,
       'tags': tags.join(":"),
-      'transfer_wallet_id': transferWalletId,
-      'transfer_value': transferValue,
+      'wallet': walletName,
     };
   }
 

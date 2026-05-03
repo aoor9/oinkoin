@@ -6,6 +6,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:piggybank/i18n.dart';
 import 'package:piggybank/models/csv_import_mapping.dart';
 import 'package:piggybank/models/record.dart' as models;
+import 'package:piggybank/premium/splash-screen.dart';
+import 'package:piggybank/premium/util-widgets.dart';
+import 'package:piggybank/services/service-config.dart';
 import 'package:piggybank/services/csv_import_service.dart';
 import 'package:piggybank/settings/csv_import/csv_import_summary_screen.dart';
 
@@ -512,6 +515,8 @@ class _CsvMappingScreenState extends State<CsvMappingScreen> {
     final column = _mapping.columnFor(field);
     final label = CsvImportMapping.fieldLabels[field] ?? field;
     final isRequired = field == 'value' || field == 'datetime';
+    final isWallet = field == 'wallet';
+    final isWalletLocked = isWallet && !ServiceConfig.isPremium;
 
     final dropdownItems = <DropdownMenuItem<String?>>[
       const DropdownMenuItem<String?>(
@@ -531,56 +536,104 @@ class _CsvMappingScreenState extends State<CsvMappingScreen> {
       child: Card(
         elevation: 0,
         color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          child: Row(
-            children: [
-              // Field label
-              SizedBox(
-                width: 120,
+        child: isWalletLocked
+            ? InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => PremiumSplashScreen()),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  child: Row(
+                    children: [
+                      // Field label
+                      SizedBox(
+                        width: 120,
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                label,
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            if (isRequired)
+                              Text(
+                                '*',
+                                style: TextStyle(
+                                  color: theme.colorScheme.error,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+
+                      // Arrow (always shown)
+                      const Icon(Icons.arrow_forward, size: 16),
+                      const SizedBox(width: 8),
+
+                      // PRO label instead of dropdown
+                      getProLabel(labelFontSize: 10.0),
+                    ],
+                  ),
+                ),
+              )
+            : Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 child: Row(
                   children: [
-                    Expanded(
-                      child: Text(
-                        label,
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
+                    // Field label
+                    SizedBox(
+                      width: 120,
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              label,
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          if (isRequired)
+                            Text(
+                              '*',
+                              style: TextStyle(
+                                color: theme.colorScheme.error,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                        ],
                       ),
                     ),
-                    if (isRequired)
-                      Text(
-                        '*',
-                        style: TextStyle(
-                          color: theme.colorScheme.error,
-                          fontWeight: FontWeight.bold,
+
+                    // Arrow (always shown)
+                    const Icon(Icons.arrow_forward, size: 16),
+                    const SizedBox(width: 8),
+
+                    // Dropdown
+                    Expanded(
+                      child: DropdownButtonFormField<String?>(
+                        initialValue: column,
+                        isExpanded: true,
+                        isDense: true,
+                        decoration: const InputDecoration(
+                          border: OutlineInputBorder(),
+                          contentPadding:
+                              EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                         ),
+                        items: dropdownItems,
+                        onChanged: (value) => _onMappingChanged(field, value),
                       ),
+                    ),
                   ],
                 ),
               ),
-
-              const Icon(Icons.arrow_forward, size: 16),
-              const SizedBox(width: 8),
-
-              // Dropdown
-              Expanded(
-                child: DropdownButtonFormField<String?>(
-                  initialValue: column,
-                  isExpanded: true,
-                  isDense: true,
-                  decoration: const InputDecoration(
-                    border: OutlineInputBorder(),
-                    contentPadding:
-                        EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  ),
-                  items: dropdownItems,
-                  onChanged: (value) => _onMappingChanged(field, value),
-                ),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }
@@ -766,19 +819,19 @@ class _CsvMappingScreenState extends State<CsvMappingScreen> {
     }
 
     return {
-      'Title': _mapped('title', record.title),
-      'Value': formatMoney(record.value),
-      'Date': formatDate(record.utcDateTime?.millisecondsSinceEpoch),
-      'Category': _mapping.columnFor('category_name') != null
+      CsvImportMapping.fieldLabels['title']!: _mapped('title', record.title),
+      CsvImportMapping.fieldLabels['value']!: formatMoney(record.value),
+      CsvImportMapping.fieldLabels['datetime']!: formatDate(record.utcDateTime?.millisecondsSinceEpoch),
+      CsvImportMapping.fieldLabels['category_name']!: _mapping.columnFor('category_name') != null
           ? (record.category?.name ?? '')
           : '—',
-      'Description': _mapped('description', record.description),
-      'Tags': _mapped(
+      CsvImportMapping.fieldLabels['description']!: _mapped('description', record.description),
+      CsvImportMapping.fieldLabels['tags']!: _mapped(
           'tags',
           (record.tags != null && record.tags!.isNotEmpty)
               ? record.tags!.join(', ')
               : ''),
-      'Wallet': _walletValue(),
+      CsvImportMapping.fieldLabels['wallet']!: _walletValue(),
     };
   }
 
