@@ -12,6 +12,9 @@ class RecurrentRecordService {
   static final _logger = Logger.withClass(RecurrentRecordService);
 
   DatabaseInterface database = ServiceConfig.database;
+  final int? profileId;
+
+  RecurrentRecordService({this.profileId});
 
   List<Record> generateRecurrentRecordsFromDateTime(
       RecurrentRecordPattern recordPattern, DateTime utcEndDate) {
@@ -20,44 +23,49 @@ class RecurrentRecordService {
           'Generating recurrent records for pattern: ${recordPattern.title}');
       final List<Record> newRecurrentRecords = [];
 
-    // 1. Get the TZLocation for the pattern's original timezone
-    final tz.Location patternLocation =
-        getLocation(recordPattern.timeZoneName!);
+      // 1. Get the TZLocation for the pattern's original timezone
+      final tz.Location patternLocation =
+          getLocation(recordPattern.timeZoneName!);
 
-    // 2. Convert the start and end dates to TZDateTime objects
-    final tz.TZDateTime startDate =
-        tz.TZDateTime.from(recordPattern.utcDateTime, patternLocation);
+      // 2. Convert the start and end dates to TZDateTime objects
+      final tz.TZDateTime startDate =
+          tz.TZDateTime.from(recordPattern.utcDateTime, patternLocation);
 
-    // Use the pattern's end date if it exists and is before the requested end date
-    DateTime effectiveEndDate = utcEndDate;
-    if (recordPattern.utcEndDate != null && recordPattern.utcEndDate!.isBefore(utcEndDate)) {
-      effectiveEndDate = recordPattern.utcEndDate!;
-      _logger.debug('Using pattern end date: ${effectiveEndDate}');
-    }
+      // Use the pattern's end date if it exists and is before the requested end date
+      DateTime effectiveEndDate = utcEndDate;
+      if (recordPattern.utcEndDate != null &&
+          recordPattern.utcEndDate!.isBefore(utcEndDate)) {
+        effectiveEndDate = recordPattern.utcEndDate!;
+        _logger.debug('Using pattern end date: ${effectiveEndDate}');
+      }
 
-    final tz.TZDateTime endDateTz =
-        tz.TZDateTime.from(effectiveEndDate, patternLocation);
+      final tz.TZDateTime endDateTz =
+          tz.TZDateTime.from(effectiveEndDate, patternLocation);
 
-    // 3. Determine the last update date in the pattern's timezone
-    tz.TZDateTime? lastUpdateTz = recordPattern.utcLastUpdate != null
-        ? tz.TZDateTime.from(recordPattern.utcLastUpdate!, patternLocation)
-        : null;
+      // 3. Determine the last update date in the pattern's timezone
+      tz.TZDateTime? lastUpdateTz = recordPattern.utcLastUpdate != null
+          ? tz.TZDateTime.from(recordPattern.utcLastUpdate!, patternLocation)
+          : null;
 
-    if (lastUpdateTz == null) {
-      // If there's no last update, add the initial record.
-      final newRecord = Record(
-        recordPattern.value,
-        recordPattern.title,
-        recordPattern.category,
-        startDate.toUtc(),
-        timeZoneName: patternLocation.name,
-        description: recordPattern.description,
-        recurrencePatternId: recordPattern.id,
-        tags: recordPattern.tags,
-      );
-      newRecurrentRecords.add(newRecord);
-      lastUpdateTz = startDate;
-    }
+      if (lastUpdateTz == null) {
+        // If there's no last update, add the initial record.
+        final newRecord = Record(
+          recordPattern.value,
+          recordPattern.title,
+          recordPattern.category,
+          startDate.toUtc(),
+          timeZoneName: patternLocation.name,
+          description: recordPattern.description,
+          recurrencePatternId: recordPattern.id,
+          walletId: recordPattern.walletId,
+          transferWalletId: recordPattern.transferWalletId,
+          transferValue: recordPattern.transferValue,
+          profileId: recordPattern.profileId,
+          tags: recordPattern.tags,
+        );
+        newRecurrentRecords.add(newRecord);
+        lastUpdateTz = startDate;
+      }
 
       if (endDateTz.isBefore(lastUpdateTz)) {
         return [];
@@ -142,6 +150,10 @@ class RecurrentRecordService {
               timeZoneName: patternLocation.name,
               description: recordPattern.description,
               recurrencePatternId: recordPattern.id,
+              walletId: recordPattern.walletId,
+              transferWalletId: recordPattern.transferWalletId,
+              transferValue: recordPattern.transferValue,
+              profileId: recordPattern.profileId,
               tags: recordPattern.tags,
             );
             newRecurrentRecords.add(newRecord);
@@ -196,16 +208,18 @@ class RecurrentRecordService {
     try {
       _logger.info('Starting recurrent records update...');
       List<RecurrentRecordPattern> patterns =
-          await database.getRecurrentRecordPatterns();
+          await database.getRecurrentRecordPatterns(profileId: profileId);
 
       _logger.debug('Processing ${patterns.length} recurrent patterns');
 
-      // Use end of current day (23:59:59.999) in UTC for splitting past/future records
-      final DateTime nowUtc = DateTime.now().toUtc();
-      final DateTime endOfToday = DateTime.utc(
-        nowUtc.year,
-        nowUtc.month,
-        nowUtc.day,
+      // Use end of current day (23:59:59.999) in local device time for splitting
+      // past/future records. Using UTC would prematurely persist records that are
+      // still "tomorrow" from the device's local perspective.
+      final DateTime nowLocal = DateTime.now();
+      final DateTime endOfToday = DateTime(
+        nowLocal.year,
+        nowLocal.month,
+        nowLocal.day,
         23,
         59,
         59,

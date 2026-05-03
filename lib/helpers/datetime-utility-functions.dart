@@ -156,7 +156,8 @@ DateTime getEndOfWeek(DateTime date) {
   return DateTime(date.year, date.month, date.day + daysToAdd, 23, 59);
 }
 
-String getDateStr(DateTime? dateTime, {AggregationMethod? aggregationMethod}) {
+
+String getDateStr(DateTime? dateTime, {AggregationMethod? aggregationMethod, bool shortYear = false}) {
   Locale myLocale = I18n.locale;
   if (aggregationMethod != null) {
     if (aggregationMethod == AggregationMethod.WEEK) {
@@ -184,11 +185,17 @@ String getDateStr(DateTime? dateTime, {AggregationMethod? aggregationMethod}) {
         ServiceConfig.sharedPreferences!, PreferencesKeys.dateFormat);
 
     if (dateFormatPref != null && dateFormatPref != "system" && dateFormatPref.isNotEmpty) {
-      return DateFormat(dateFormatPref, myLocale.toString()).format(dateTime!);
+      final pattern = shortYear ? dateFormatPref.replaceAll('yyyy', 'yy') : dateFormatPref;
+      return DateFormat(pattern, myLocale.toString()).format(dateTime!);
     }
   }
 
-  return DateFormat.yMd(myLocale.toString()).format(dateTime!);
+  final baseFormat = DateFormat.yMd(myLocale.toString());
+  if (shortYear) {
+    final shortPattern = baseFormat.pattern!.replaceAll('yyyy', 'yy').replaceAll(RegExp(r'(?<!y)y(?!y)'), 'yy');
+    return DateFormat(shortPattern, myLocale.toString()).format(dateTime!);
+  }
+  return baseFormat.format(dateTime!);
 }
 
 String extractMonthString(DateTime dateTime) {
@@ -305,7 +312,9 @@ List<DateTime> calculateInterval(
 
     case HomepageTimeInterval.CurrentWeek:
       DateTime from = getStartOfWeek(referenceDate);
-      DateTime to = from.add(const Duration(days: 6)).add(DateTimeConstants.END_OF_DAY);
+      // Use date-only arithmetic to avoid DST boundary issues.
+      // Duration(days: 6) can cross a DST transition and land on the wrong day.
+      DateTime to = DateTime(from.year, from.month, from.day + 6, 23, 59, 59);
       return [from, to];
 
     case HomepageTimeInterval.CurrentYear:

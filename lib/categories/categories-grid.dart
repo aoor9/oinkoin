@@ -64,8 +64,9 @@ class CategoriesGridState extends State<CategoriesGrid> {
               Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (context) =>
-                      EditRecordPage(passedCategory: category),
+                  builder: (context) => EditRecordPage(
+                    passedCategory: category,
+                  ),
                 ),
               );
             } else {

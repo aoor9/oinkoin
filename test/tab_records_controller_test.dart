@@ -44,7 +44,8 @@ void main() {
   setUp(() async {
     // Initialize shared preferences with defaults
     SharedPreferences.setMockInitialValues({
-      PreferencesKeys.homepageTimeInterval: HomepageTimeInterval.CurrentMonth.index,
+      PreferencesKeys.homepageTimeInterval:
+          HomepageTimeInterval.CurrentMonth.index,
       PreferencesKeys.homepageRecordsMonthStartDay: 1,
     });
     sharedPreferences = await SharedPreferences.getInstance();
@@ -113,7 +114,8 @@ void main() {
 
       // Assert: Should now be 2025
       expect(controller.customIntervalFrom, DateTime(2025, 1, 1));
-      expect(controller.customIntervalTo, DateTime(2025, 12, 31).add(DateTimeConstants.END_OF_DAY));
+      expect(controller.customIntervalTo,
+          DateTime(2025, 12, 31).add(DateTimeConstants.END_OF_DAY));
     });
 
     test(
@@ -133,7 +135,8 @@ void main() {
 
       // Assert: Should now be 2024
       expect(controller.customIntervalFrom, DateTime(2024, 1, 1));
-      expect(controller.customIntervalTo, DateTime(2024, 12, 31).add(DateTimeConstants.END_OF_DAY));
+      expect(controller.customIntervalTo,
+          DateTime(2024, 12, 31).add(DateTimeConstants.END_OF_DAY));
     });
 
     test(
@@ -147,8 +150,14 @@ void main() {
         PreferencesKeys.homepageTimeInterval,
         HomepageTimeInterval.CurrentWeek.index,
       );
+      // Pin firstDayOfWeek to Monday so getFirstDayOfWeekIndex() is deterministic
+      // regardless of I18n.locale state (which may be altered by other test files).
+      await sharedPreferences.setInt(
+        PreferencesKeys.firstDayOfWeek,
+        DateTime.monday,
+      );
 
-      // Get the current week's start
+      // Get the current week's start (uses same pinned preference as controller)
       DateTime now = DateTime.now();
       DateTime currentWeekStart = getStartOfWeek(now);
 
@@ -178,17 +187,27 @@ void main() {
         PreferencesKeys.homepageTimeInterval,
         HomepageTimeInterval.CurrentWeek.index,
       );
+      // Pin firstDayOfWeek to Monday so getStartOfWeek() is deterministic
+      // regardless of I18n.locale state (which may be altered by other test files).
+      await sharedPreferences.setInt(
+        PreferencesKeys.firstDayOfWeek,
+        DateTime.monday,
+      );
 
-      // Get the current week's start
-      DateTime now = DateTime.now();
-      DateTime currentWeekStart = getStartOfWeek(now);
+      // Use fixed dates to avoid any date-sensitive flakiness.
+      // April 1, 2026 is a Wednesday. With Monday as first day,
+      // the week starts March 30, 2026 (Monday).
+      DateTime currentWeekStart = DateTime(2026, 3, 30);
+
+      // Set a known base interval so shiftInterval uses it instead of DateTime.now().
+      controller.customIntervalFrom = currentWeekStart;
 
       // Act: Shift backward by 1 week
       await controller.shiftInterval(-1);
 
-      // Assert: Should be previous week
-      DateTime expectedStart = currentWeekStart.subtract(Duration(days: 7));
-      DateTime expectedEnd = expectedStart.add(Duration(days: 6));
+      // Assert: Should be previous week (March 23-29, 2026)
+      DateTime expectedStart = DateTime(2026, 3, 23);
+      DateTime expectedEnd = DateTime(2026, 3, 29, 23, 59, 59);
 
       expect(controller.customIntervalFrom!.year, expectedStart.year);
       expect(controller.customIntervalFrom!.month, expectedStart.month);
@@ -216,7 +235,8 @@ void main() {
 
       // Assert: Should be next month
       DateTime expectedDateFrom = DateTime(now.year, now.month + 1, 1);
-      DateTime expectedDateTo = getEndOfMonth(expectedDateFrom.year, expectedDateFrom.month);
+      DateTime expectedDateTo =
+          getEndOfMonth(expectedDateFrom.year, expectedDateFrom.month);
       expect(controller.customIntervalFrom, expectedDateFrom);
       expect(controller.customIntervalTo, expectedDateTo);
     });
@@ -239,7 +259,8 @@ void main() {
 
       // Assert: Should be next year
       expect(controller.customIntervalFrom, DateTime(now.year + 1, 1, 1));
-      expect(controller.customIntervalTo, DateTime(now.year + 1, 12, 31).add(DateTimeConstants.END_OF_DAY));
+      expect(controller.customIntervalTo,
+          DateTime(now.year + 1, 12, 31).add(DateTimeConstants.END_OF_DAY));
     });
 
     test('should update backgroundImageIndex to the new month', () async {
@@ -298,7 +319,8 @@ void main() {
     test('shiftMonthWeekYear: Forward Shift with custom start day', () async {
       // Setup Initial State (Jan 15, 2024 to Feb 14, 2024)
       controller.customIntervalFrom = DateTime(2024, 1, 15);
-      controller.customIntervalTo = DateTime(2024, 2, 14).add(DateTimeConstants.END_OF_DAY);
+      controller.customIntervalTo =
+          DateTime(2024, 2, 14).add(DateTimeConstants.END_OF_DAY);
 
       // Mock settings to return Month view and Start Day 15
       await sharedPreferences.setInt(
@@ -325,7 +347,8 @@ void main() {
     test('shiftMonthWeekYear: Backward Shift with custom start day', () async {
       // Setup Initial State (Jan 15, 2024 to Feb 14, 2024)
       controller.customIntervalFrom = DateTime(2024, 1, 15);
-      controller.customIntervalTo = DateTime(2024, 2, 14).add(DateTimeConstants.END_OF_DAY);
+      controller.customIntervalTo =
+          DateTime(2024, 2, 14).add(DateTimeConstants.END_OF_DAY);
 
       // Mock settings to return Month view and Start Day 15
       await sharedPreferences.setInt(
@@ -350,7 +373,8 @@ void main() {
       expect(controller.header, contains("-"));
     });
 
-    test('shiftMonthWeekYear: Clamping safety when moving to February', () async {
+    test('shiftMonthWeekYear: Clamping safety when moving to February',
+        () async {
       // Setup: Start Day 31
       controller.customIntervalFrom = DateTime(2024, 1, 31);
 
